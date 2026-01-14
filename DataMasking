@@ -1,0 +1,123 @@
+# Install required libraries
+!pip install transformers peft accelerate bitsandbytes sentencepiece ipywidgets --quiet
+
+import re
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import LoraConfig, get_peft_model, TaskType
+import ipywidgets as widgets
+from IPython.display import display
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# -----------------------------
+# Step 1: Login to Hugging Face using your token
+# -----------------------------
+from huggingface_hub import login
+login(token="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")
+
+# -----------------------------
+# Step 2: Load LLaMA 2 7B
+# -----------------------------
+model_name = "meta-llama/Llama-2-7b-hf"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    device_map="auto",
+    torch_dtype=torch.float16
+)
+
+# -----------------------------
+# Step 3: Apply LoRA adapters (for demo, no actual training yet)
+# -----------------------------
+lora_config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    r=16,
+    lora_alpha=32,
+    target_modules=["q_proj", "v_proj"],
+    lora_dropout=0.1
+)
+model = get_peft_model(model, lora_config)
+
+# -----------------------------
+# Step 4: Function to generate text with LLaMA
+# -----------------------------
+def llama_generate(prompt, max_new_tokens=150):
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    outputs = model.generate(**inputs, max_new_tokens=max_new_tokens)
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+# -----------------------------
+# Step 5: Regex-based PII detection
+# -----------------------------
+regex_patterns = {
+    "EMAIL": r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+    "PHONE": r"\+?\d[\d -]{8,}\d",
+    "SSN": r"\b\d{3}-\d{2}-\d{4}\b"
+}
+
+def detect_missed_pii(original_text, masked_text):
+    missed_pii = []
+    for label, pattern in regex_patterns.items():
+        for match in re.findall(pattern, original_text):
+            if match not in masked_text:
+                missed_pii.append((label, match))
+    return missed_pii
+
+# -----------------------------
+# Step 6: Interactive Text Input
+# -----------------------------
+input_text = widgets.Textarea(
+    value="Contact Alice Wonderland at alice.wonder_99@company-mail.io or +44 7911-123-456. Mail to 742 Evergreen Terrace, Springfield. Reference ID: SSN 987-65-4321.",
+    placeholder="Enter text containing PII",
+    description="Input Text:",
+    layout=widgets.Layout(width="90%", height="150px")
+)
+
+output_base = widgets.Textarea(
+    value="",
+    placeholder="Base LLaMA masked text",
+    description="Base Masked:",
+    layout=widgets.Layout(width="90%", height="150px")
+)
+
+output_lora = widgets.Textarea(
+    value="",
+    placeholder="LoRA-enhanced masked text",
+    description="LoRA Masked:",
+    layout=widgets.Layout(width="90%", height="150px")
+)
+
+missed_output = widgets.Textarea(
+    value="",
+    placeholder="PII missed by base model",
+    description="Missed PII:",
+    layout=widgets.Layout(width="90%", height="100px")
+)
+
+def run_masking(change):
+    text = input_text.value
+    # Base LLaMA
+    prompt = f"Mask all personal information (names, emails, phones, addresses, SSN) in the following text using placeholders [NAME], [EMAIL], [PHONE], [ADDRESS], [SSN]:\n{text}"
+    base_masked = llama_generate(prompt)
+    output_base.value = base_masked
+
+    # Detect missed PII
+    missed = detect_missed_pii(text, base_masked)
+    missed_output.value = str(missed) if missed else "No PII missed"
+
+    # LoRA-enhanced (simulated)
+    lora_masked = base_masked
+    # For demo, assume LoRA fixes all missed PII
+    for label, match in missed:
+        lora_masked = lora_masked.replace(match, f"[{label}]")
+    output_lora.value = lora_masked
+
+# Link run to input changes
+input_text.observe(run_masking, names="value")
+
+display(input_text, output_base, missed_output, output_lora)
+
+# Run initially
+run_masking(None)
+!pip install -U transformers
